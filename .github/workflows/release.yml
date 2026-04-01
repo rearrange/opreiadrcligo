@@ -1,0 +1,82 @@
+name: Release
+
+# Triggered when a version tag is pushed, e.g. git tag v1.0.0 && git push --tags
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # ── 1. Tests must pass before any binary is shipped ───────────────────────
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test -race ./...
+
+  # ── 2. Cross-compile for each target platform ─────────────────────────────
+  build:
+    name: Build (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            asset: adr-linux-amd64.tar.gz
+          - goos: linux
+            goarch: arm64
+            asset: adr-linux-arm64.tar.gz
+          - goos: darwin
+            goarch: amd64
+            asset: adr-darwin-amd64.tar.gz
+          - goos: darwin
+            goarch: arm64
+            asset: adr-darwin-arm64.tar.gz
+          - goos: windows
+            goarch: amd64
+            asset: adr-windows-amd64.zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            go build -trimpath -ldflags="-s -w" -o adr.exe .
+          else
+            go build -trimpath -ldflags="-s -w" -o adr .
+          fi
+
+      - name: Package (tar.gz)
+        if: matrix.goos != 'windows'
+        run: tar -czf "${{ matrix.asset }}" adr
+
+      - name: Package (zip)
+        if: matrix.goos == 'windows'
+        run: zip "${{ matrix.asset }}" adr.exe
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.asset }}
+          generate_release_notes: true
